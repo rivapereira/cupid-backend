@@ -1,3 +1,10 @@
+
+app/models/sentiment_model/sentiment_model/checkpoint-113/
+app/models/sentiment_model/sentiment_model/checkpoint-226/
+
+*.pt
+*.safetensors
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
