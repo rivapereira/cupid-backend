@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routes import predict  # this assumes app/routes/predict.py exists and has a router
 from app.routes import sentiment
 from fastapi import APIRouter
+from fastapi.middleware.cors import CORSMiddleware
+
 
 
 router = APIRouter()
