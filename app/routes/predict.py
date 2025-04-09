@@ -1,26 +1,28 @@
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
-import os
+from fastapi import APIRouter, HTTPException # type: ignore
+from pydantic import BaseModel # type: ignore
+from sklearn.metrics.pairwise import cosine_similarity # type: ignore
+from typing import List
+import pickle  # For loading the .pkl model
+import logging
+
 import pickle
-import shap
-import matplotlib.pyplot as plt
-import pandas as pd
-from pydantic import BaseModel
+import logging
 
 
 router = APIRouter()
 
-# Load model
-MODEL_PATH = os.path.join("app", "models", "cupid_match_model_best.pkl")
+# Correct path to the model
+model_path = "app/models/cupid_match_model_best.pkl"
 
+# Load the model
 try:
-    with open(MODEL_PATH, "rb") as f:
-        model = pickle.load(f)
+    with open(model_path, "rb") as model_file:
+        model = pickle.load(model_file)
+    logging.info("Model loaded successfully!")
 except Exception as e:
-    raise RuntimeError(f"Failed to load model: {e}")
+    logging.error(f"Error loading model: {e}")
+    model = None
 
-# Store last input for SHAP
-last_input_df = None
 
 # Input schema
 class Profile(BaseModel):
@@ -28,79 +30,183 @@ class Profile(BaseModel):
     gender: str
     orientation: str
     essay: str
-    traits: list[str]
+    traits: list[str]  # User selected traits
 
+mockProfiles = [
+    {
+        "name": "Alex",
+        "image": "https://randomuser.me/api/portraits/men/32.jpg",
+        "match": "92%",
+        "sentiment": "😊",
+        "reason": "You both love nature walks and deep chats.",
+        "traits": ["romantic", "adventurous"]
+    },
+    {
+        "name": "Sam",
+        "image": "https://randomuser.me/api/portraits/women/45.jpg",
+        "match": "87%",
+        "sentiment": "😐",
+        "reason": "You have similar humor and music taste.",
+        "traits": ["chaotic", "creative"]
+    },
+    {
+        "name": "Jules",
+        "image": "https://randomuser.me/api/portraits/men/76.jpg",
+        "match": "90%",
+        "sentiment": "😊",
+        "reason": "You both enjoy lowkey weekends and comfort food.",
+        "traits": ["introvert", "dreamboat"]
+    },
+    {
+        "name": "Lana",
+        "image": "https://randomuser.me/api/portraits/women/23.jpg",
+        "match": "85%",
+        "sentiment": "😊",
+        "reason": "You share a love for music and spontaneous road trips.",
+        "traits": ["musical", "adventurous"]
+    },
+    {
+        "name": "Ryan",
+        "image": "https://randomuser.me/api/portraits/men/56.jpg",
+        "match": "75%",
+        "sentiment": "😐",
+        "reason": "You both enjoy working out and exploring new tech.",
+        "traits": ["sporty", "tech-savvy"]
+    },
+    {
+        "name": "Sophia",
+        "image": "https://randomuser.me/api/portraits/women/74.jpg",
+        "match": "88%",
+        "sentiment": "😊",
+        "reason": "You're both optimists and enjoy outdoor activities.",
+        "traits": ["optimistic", "outdoorsy"]
+    },
+    {
+        "name": "Olivia",
+        "image": "https://randomuser.me/api/portraits/women/15.jpg",
+        "match": "92%",
+        "sentiment": "😊",
+        "reason": "You're both empathetic and passionate about helping others.",
+        "traits": ["empathetic", "creative"]
+    },
+    {
+        "name": "Ethan",
+        "image": "https://randomuser.me/api/portraits/men/63.jpg",
+        "match": "78%",
+        "sentiment": "😐",
+        "reason": "You both love to travel and enjoy trying new foods.",
+        "traits": ["adventurous", "musical"]
+
+    },
+  {
+    "name": "Jester",
+    "image": "https://randomuser.me/api/portraits/men/32.jpg",
+    "match": "92%",
+    "sentiment": "🎶",
+    "reason": "You both share a love for music, anime, and creative expression.",
+    "traits": ["Creative", "Adventurous", "Anime Enthusiast"]
+  },
+  {
+    "name": "Abyaz",
+    "image": "https://randomuser.me/api/portraits/men/33.jpg",
+    "match": "87%",
+    "sentiment": "🤓",
+    "reason": "You both are driven, intellectual, and value practical knowledge.",
+    "traits": ["Intelligent", "Logical", "Cool-headed"]
+  },
+  {
+    "name": "Jade",
+    "image": "https://randomuser.me/api/portraits/women/34.jpg",
+    "match": "90%",
+    "sentiment": "🍝",
+    "reason": "You both are into tech, problem-solving, and good food.",
+    "traits": ["Analytical", "Tech-savvy", "Foodie"]
+  },
+  {
+    "name": "BB",
+    "image": "https://randomuser.me/api/portraits/women/35.jpg",
+    "match": "88%",
+    "sentiment": "🎨",
+    "reason": "You both share a creative passion and understand the value of visual aesthetics.",
+    "traits": ["Creative", "Design-focused", "Independent"]
+  },
+  {
+    "name": "Qasim",
+    "image": "https://randomuser.me/api/portraits/men/36.jpg",
+    "match": "85%",
+    "sentiment": "🎮",
+    "reason": "You both enjoy Pokemon, anime, and the escapism that comes with them.",
+    "traits": ["Geeky", "Anime lover", "Gaming enthusiast"]
+  },
+  {
+    "name": "Nao",
+    "image": "https://randomuser.me/api/portraits/men/37.jpg",
+    "match": "91%",
+    "sentiment": "🕹️",
+    "reason": "You both have a shared passion for gaming, especially Pokemon and rhythm games.",
+    "traits": ["Energetic", "Multicultural", "Music lover"]
+  },
+  {
+    "name": "Hiba",
+    "image": "https://randomuser.me/api/portraits/women/38.jpg",
+    "match": "93%",
+    "sentiment": "💻",
+    "reason": "You both value independence, creativity, and are driven by your passions.",
+    "traits": ["Strong-willed", "Tech-savvy", "Creative"]
+  }
+]
+
+    
+
+
+@router.get("/mock-profiles")
+async def get_mock_profiles():
+    return mockProfiles
+
+def calculate_cosine_similarity(user_traits: list[str], profile_traits: list[str]) -> float:
+    # Convert traits to binary vectors based on presence or absence of traits
+    all_traits = list(set(user_traits + profile_traits))  # All unique traits
+    user_vector = [1 if trait in user_traits else 0 for trait in all_traits]
+    profile_vector = [1 if trait in profile_traits else 0 for trait in all_traits]
+
+    # Log the vectors to check their values
+    logging.debug(f"User Vector: {user_vector}")
+    logging.debug(f"Profile Vector: {profile_vector}")
+
+    # Compute the cosine similarity
+    similarity = cosine_similarity([user_vector], [profile_vector])[0][0]
+
+    # Log the similarity score
+    logging.debug(f"Cosine Similarity: {similarity}")
+    return similarity
+
+# Function to handle prediction
 @router.post("/")
 def predict_match(profile: Profile):
-    global last_input_df
     try:
-        # Feature engineering with meaningful flags
-        features = {
-            "age": profile.age,
-            "essay_length": len(profile.essay),
-            "num_traits": len(profile.traits),
-            "has_love_word": int("love" in profile.essay.lower()),
-            "has_fun_word": int("fun" in profile.essay.lower()),
-            "has_chill_word": int("chill" in profile.essay.lower())
-        }
+        updatedProfiles = []
 
-        X = pd.DataFrame([features])
-        last_input_df = X
+        for p in mockProfiles:
+            # Calculate cosine similarity between user traits and profile traits
+            similarity_score = calculate_cosine_similarity(profile.traits, p['traits'])
+            
+            # Calculate match percentage
+            match_percentage = round(similarity_score * 100, 2)
+            
+            # Determine sentiment based on match score
+            sentiment = "😊" if match_percentage > 70 else "😐" if match_percentage > 40 else "😞"
+            
+            # Update profile with match score and sentiment
+            updatedProfile = {
+                **p,
+                "match": f"{match_percentage}%",
+                "sentiment": sentiment,
+                "reason": f"You both share similar traits: {', '.join(profile.traits)}."
+            }
 
-        # Predict match score
-        match_score = model.predict_proba(X)[0][1] * 100
+            updatedProfiles.append(updatedProfile)
 
-        # Basic sentiment rule
-        sentiment = "positive" if "love" in profile.essay.lower() else "neutral"
-
-        return {
-            "match_score": round(float(match_score), 2),
-            "sentiment": sentiment
-        }
+        return {"profiles": updatedProfiles}  # Return the updated profiles with match data
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
-
-from fastapi.responses import FileResponse
-import os
-import shap
-import matplotlib.pyplot as plt
-
-# Assuming you have already loaded the model, and 'last_input_df' contains the necessary data.
-
-# Ensure the static folder exists
-static_path = os.path.join("app", "static")
-if not os.path.exists(static_path):
-    os.makedirs(static_path)
-
-import logging
-
-logging.basicConfig(level=logging.DEBUG)
-
-@router.get("/predict/explanation/")
-async def get_shap_explanation():
-    global last_input_df
-    if last_input_df is None:
-        raise HTTPException(status_code=400, detail="No input data for SHAP explanation.")
-    
-    try:
-        explainer = shap.Explainer(model, last_input_df)
-        shap_values = explainer(last_input_df)
-
-        # Generate waterfall plot
-        plt.clf()
-        plt.figure(figsize=(10, 5))
-        shap.plots.waterfall(shap_values[0], show=False)
-        plt.tight_layout()
-
-        # Save SHAP explanation image to static folder
-        image_path = os.path.join(static_path, "shap_explanation.png")
-        plt.savefig(image_path, bbox_inches="tight", dpi=200)
-
-        return FileResponse(image_path, media_type="image/png")
-
-    except Exception as e:
-        print(f"Error generating SHAP explanation: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate SHAP explanation.")
