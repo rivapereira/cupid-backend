@@ -1,14 +1,17 @@
 from fastapi import FastAPI
-from app.routes import predict
+from app.routes import predict, sentiment  # Import your routes
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import predict  # this assumes app/routes/predict.py exists and has a router
-from app.routes import sentiment
-from fastapi import APIRouter
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+import os
 
+# Ensure the static folder exists
+static_path = os.path.join("app", "static")
+if not os.path.exists(static_path):
+    os.makedirs(static_path)  # Create the folder if it doesn't exist
 
+# Path to save the SHAP explanation image
+image_path = os.path.join(static_path, "shap_explanation.png")
 
-router = APIRouter()
 
 app = FastAPI(
     title="Cupid AI Backend",
@@ -16,24 +19,23 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Allow local frontend access
+# Mount static directory to serve files like images
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
+# Add CORS middleware for frontend access
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Change to your frontend URL in production
+    allow_origins=["*"],  # You can change this to your frontend URL in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(predict.router, prefix="/predict")  # this line is crashing currently
+# Include routers
+app.include_router(predict.router, prefix="/predict")  # Ensure the prefix is correct
 app.include_router(sentiment.router, prefix="/sentiment")
 
-from app.routes import sentiment
-print("Sentiment module:", dir(sentiment))  # <-- Add this
-
-
+# Root endpoint
 @app.get("/")
 def read_root():
     return {"message": "Hello from Cupid API!"}
-
-
