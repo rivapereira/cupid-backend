@@ -1,29 +1,38 @@
-from fastapi import APIRouter, HTTPException # type: ignore
-from pydantic import BaseModel # type: ignore
-from sklearn.metrics.pairwise import cosine_similarity # type: ignore
-from typing import List
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from sklearn.metrics.pairwise import cosine_similarity
 import pickle  # For loading the .pkl model
 import logging
+from transformers import DistilBertTokenizerFast, DistilBertForSequenceClassification
+import torch
 
-import pickle
-import logging
-
+# Initialize logging
+logging.basicConfig(level=logging.DEBUG)
 
 router = APIRouter()
 
-# Correct path to the model
+# Model paths
 model_path = "app/models/cupid_match_model_best.pkl"
+sentiment_model_path = "app/models/sentiment_model/"  
 
-# Load the model
+# Load the Cupid Match Model
 try:
     with open(model_path, "rb") as model_file:
-        model = pickle.load(model_file)
-    logging.info("Model loaded successfully!")
+        match_model = pickle.load(model_file)
+    logging.info("Cupid Match Model loaded successfully!")
 except Exception as e:
-    logging.error(f"Error loading model: {e}")
-    model = None
+    logging.error(f"Error loading Cupid Match Model: {e}")
+    match_model = None
 
-
+# Load the Sentiment Model
+try:
+    sentiment_model = DistilBertForSequenceClassification.from_pretrained(sentiment_model_path)
+    sentiment_tokenizer = DistilBertTokenizerFast.from_pretrained(sentiment_model_path)
+    logging.info("Sentiment Model loaded successfully!")
+except Exception as e:
+    logging.error(f"Error loading Sentiment Model: {e}")
+    sentiment_model = None
+    
 # Input schema
 class Profile(BaseModel):
     age: int
@@ -31,6 +40,7 @@ class Profile(BaseModel):
     orientation: str
     essay: str
     traits: list[str]  # User selected traits
+
 
 mockProfiles = [
     {
@@ -156,36 +166,41 @@ mockProfiles = [
   }
 ]
 
+# Function to calculate cosine similarity between two arrays (user traits vs profile traits)
+def calculate_cosine_similarity(user_traits: list[str], profile_traits: list[str]) -> float:
+    all_traits = list(set(user_traits + profile_traits))
+    user_vector = [1 if trait in user_traits else 0 for trait in all_traits]
+    profile_vector = [1 if trait in profile_traits else 0 for trait in all_traits]
+    similarity = cosine_similarity([user_vector], [profile_vector])[0][0]
+    return similarity
+
+# Function to predict sentiment of an essay using the sentiment model
+def predict_sentiment(essay: str) -> str:
+    # Tokenize the essay
+    inputs = sentiment_tokenizer(essay, return_tensors="pt", padding=True, truncation=True, max_length=128)
     
+    # Make prediction
+    with torch.no_grad():
+        logits = sentiment_model(**inputs).logits
+    
+    # Get the sentiment label (0 = negative, 1 = positive)
+    sentiment = torch.argmax(logits, dim=1).item()
+    return "😊" if sentiment == 1 else "😞"  # Emoji for positive/negative sentiment
 
-
+# Endpoint to get mock profiles
 @router.get("/mock-profiles")
 async def get_mock_profiles():
     return mockProfiles
-
-def calculate_cosine_similarity(user_traits: list[str], profile_traits: list[str]) -> float:
-    # Convert traits to binary vectors based on presence or absence of traits
-    all_traits = list(set(user_traits + profile_traits))  # All unique traits
-    user_vector = [1 if trait in user_traits else 0 for trait in all_traits]
-    profile_vector = [1 if trait in profile_traits else 0 for trait in all_traits]
-
-    # Log the vectors to check their values
-    logging.debug(f"User Vector: {user_vector}")
-    logging.debug(f"Profile Vector: {profile_vector}")
-
-    # Compute the cosine similarity
-    similarity = cosine_similarity([user_vector], [profile_vector])[0][0]
-
-    # Log the similarity score
-    logging.debug(f"Cosine Similarity: {similarity}")
-    return similarity
 
 # Function to handle prediction
 @router.post("/")
 def predict_match(profile: Profile):
     try:
         updatedProfiles = []
-
+        
+        # Get the sentiment of the user's essay
+        user_sentiment = predict_sentiment(profile.essay)
+        
         for p in mockProfiles:
             # Calculate cosine similarity between user traits and profile traits
             similarity_score = calculate_cosine_similarity(profile.traits, p['traits'])
@@ -193,14 +208,11 @@ def predict_match(profile: Profile):
             # Calculate match percentage
             match_percentage = round(similarity_score * 100, 2)
             
-            # Determine sentiment based on match score
-            sentiment = "😊" if match_percentage > 70 else "😐" if match_percentage > 40 else "😞"
-            
-            # Update profile with match score and sentiment
+            # Update profile with match score, sentiment, and reason
             updatedProfile = {
                 **p,
                 "match": f"{match_percentage}%",
-                "sentiment": sentiment,
+                "sentiment": user_sentiment,  # Using sentiment from user's essay
                 "reason": f"You both share similar traits: {', '.join(profile.traits)}."
             }
 
